@@ -11,7 +11,16 @@ public struct AccountUsage: Sendable, Equatable {
     }
 
     public let subscriptionType: String?
+    public let rateLimitTier: String?
     public let state: State
+
+    public init(subscriptionType: String?, rateLimitTier: String?, state: State) {
+        self.subscriptionType = subscriptionType
+        self.rateLimitTier = rateLimitTier
+        self.state = state
+    }
+
+    public var planLabel: String? { PlanLabel.text(subscriptionType: subscriptionType, rateLimitTier: rateLimitTier) }
 }
 
 public typealias CredentialLoader = @Sendable (URL) throws -> OAuthCredentials
@@ -36,9 +45,15 @@ public struct AccountUsageProvider: Sendable {
     public func fetch(for account: Account) async throws -> AccountUsage {
         let stored = try loadCredentials(account.configDirectory)
         if let expiresAt = stored.expiresAt, stored.isExpired {
-            return AccountUsage(subscriptionType: stored.subscriptionType, state: .idle(expiredAt: expiresAt))
+            return AccountUsage(
+                subscriptionType: stored.subscriptionType, rateLimitTier: stored.rateLimitTier,
+                state: .idle(expiredAt: expiresAt)
+            )
         }
         let data = try await client.fetchRaw(accessToken: stored.accessToken)
-        return AccountUsage(subscriptionType: stored.subscriptionType, state: .live(rawUsage: data))
+        return AccountUsage(
+            subscriptionType: stored.subscriptionType, rateLimitTier: stored.rateLimitTier,
+            state: .live(rawUsage: data)
+        )
     }
 }

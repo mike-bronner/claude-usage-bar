@@ -13,9 +13,11 @@ public struct Account: Identifiable, Hashable, Sendable {
     /// True when this is the default config directory, whose Keychain entry is unsuffixed.
     public var isDefault: Bool { configDirectory.path == Self.defaultConfigDirectory.path }
 
-    /// Label shown in the menu: organization when known, else the email's local part.
+    /// Label shown in the menu: the organization when it is a real one, else the email's local
+    /// part. Personal accounts get an auto-generated "<email>'s Organization", which is no label.
     public var displayName: String {
-        organizationName ?? String(emailAddress.prefix(while: { $0 != "@" }))
+        if let organizationName, !organizationName.contains(emailAddress) { return organizationName }
+        return String(emailAddress.prefix(while: { $0 != "@" }))
     }
 
     public static var defaultConfigDirectory: URL {

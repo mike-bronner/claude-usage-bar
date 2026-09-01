@@ -62,6 +62,29 @@ final class AccountUsageProviderTests: XCTestCase {
         XCTAssertEqual(sent, 1)
     }
 
+    func testRateLimitCarriesRetryAfterSeconds() async throws {
+        let transport = StubTransport([StubTransport.Response(status: 429, body: "", headers: ["Retry-After": "30"])])
+        let credentials = Self.credentials(expiresAt: Date(timeIntervalSinceNow: 3600))
+        await assertThrows(try await provider(credentials, transport).fetch(for: account)) { error in
+            guard case UsageError.rateLimited(retryAfter: 30) = error else { return XCTFail("got \(error)") }
+        }
+    }
+
+    func testRateLimitWithoutOrUnparseableRetryAfterIsNil() async throws {
+        let transport = StubTransport([
+            StubTransport.Response(status: 429, body: ""),
+            StubTransport.Response(status: 429, body: "", headers: ["Retry-After": "Wed, 02 Sep 2026 00:00:00 GMT"]),
+            // Observed live: the endpoint says 0 while still refusing.
+            StubTransport.Response(status: 429, body: "", headers: ["Retry-After": "0"]),
+        ])
+        let credentials = Self.credentials(expiresAt: Date(timeIntervalSinceNow: 3600))
+        for _ in 0..<3 {
+            await assertThrows(try await provider(credentials, transport).fetch(for: account)) { error in
+                guard case UsageError.rateLimited(retryAfter: nil) = error else { return XCTFail("got \(error)") }
+            }
+        }
+    }
+
     func testCredentialLoadFailurePropagates() async throws {
         let transport = StubTransport([])
         let provider = provider(loader: { _ in throw KeychainError.notFound(services: ["x"]) }, transport)

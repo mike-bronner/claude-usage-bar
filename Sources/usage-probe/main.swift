@@ -29,7 +29,7 @@ for account in accounts {
 
     let expiry = credentials.expiresAt.map(iso.string(from:)) ?? "none"
     let loginExpiry = credentials.refreshTokenExpiresAt.map(iso.string(from:)) ?? "none"
-    print("   keychain ✅ token \(credentials.accessToken.count) chars · plan \(credentials.subscriptionType ?? "?") · expires \(expiry) · login expires \(loginExpiry)")
+    print("   keychain ✅ token \(credentials.accessToken.count) chars · plan \(credentials.subscriptionType ?? "?") · tier \(credentials.rateLimitTier ?? "?") · expires \(expiry) · login expires \(loginExpiry)")
 
     do {
         switch try await provider.fetch(for: account).state {
@@ -42,5 +42,14 @@ for account in accounts {
         }
     } catch {
         print("   usage    ❌ \(error)")
+        // Diagnostics for the failure: status, every response header, and the body. No token.
+        if let (http, body) = try? await UsageClient().fetchResponse(accessToken: credentials.accessToken) {
+            print("   response \(http.statusCode)")
+            for (key, value) in http.allHeaderFields.sorted(by: { "\($0.key)" < "\($1.key)" }) {
+                print("            \(key): \(value)")
+            }
+            let text = String(decoding: body.prefix(600), as: UTF8.self)
+            print("            body: \(text.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }.joined())")
+        }
     }
 }

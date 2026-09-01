@@ -8,16 +8,18 @@ SwiftPM package (no Xcode project — `.xcodeproj` is gitignored). Xcode opens `
 
 - **Build**: `swift build`
 - **Test**: `swift test` — no Keychain or network access; everything is stubbed via `Transport`.
-- **Probe live accounts**: `make probe` — builds, codesigns `usage-probe` with a stable identity, and
-  prints discovered accounts, resolved Keychain service names, and the raw `/api/oauth/usage`
-  response. Never prints any token. (`swift run usage-probe` works too, but its ad-hoc signature
-  changes every build, so the Keychain re-prompts each time.)
+- **Run the app (dev)**: `make run` — builds, codesigns `ClaudeUsageBar` with a stable identity, and
+  runs it unbundled. It hides its Dock icon itself until `make bundle` supplies `LSUIElement`.
+- **Probe live accounts**: `make probe` — same for `usage-probe`, which prints discovered accounts,
+  resolved Keychain service names, and the raw `/api/oauth/usage` response. Never prints any token.
+  (`swift run …` works too, but its ad-hoc signature changes every build, so the Keychain
+  re-prompts each time.)
 
 Target: macOS 14+, Swift 6 strict concurrency.
 
 ## Architecture
 
-**Data flow**: `~/.claude*` config dirs → `AccountScanner` → `KeychainCredentialStore` → `AccountUsageProvider` → `UsageClient` → menu bar UI
+**Data flow**: `~/.claude*` config dirs → `AccountScanner` → `KeychainCredentialStore` → `AccountUsageProvider` → `UsageClient` → `UsageSnapshot` → `UsageModel` → `MenuBarExtra`
 
 | Layer | Component | Role |
 |-------|-----------|------|
@@ -25,6 +27,20 @@ Target: macOS 14+, Swift 6 strict concurrency.
 | Credentials | `KeychainCredentialStore` | Derives the Keychain service names per config dir, reads the freshest OAuth token |
 | Orchestration | `AccountUsageProvider` | Per account: fetch when the token is valid, report `.idle` when it is not |
 | Network | `UsageClient` | `GET https://api.anthropic.com/api/oauth/usage` with a bearer token, over an injectable `Transport` |
+| Decoding | `UsageSnapshot` | `limits` + `spend` → typed limits and credits; `ResetFormatter`, `PlanLabel` format them |
+| Status | `StatusLevel` | Session percent + server `severity` + idle → one of idle/unknown/low/medium/high/critical |
+| UI | `UsageModel`, `StatusItemController`, `UsageMenuContent`, `RobotIcon` | `@Observable` model polled every 15 min (the endpoint 429s under ~180 req/h and stays tripped for a long window); `NSStatusItem` + `NSMenu`; selected account persisted in `UserDefaults` |
+
+The `ClaudeUsageBar` target holds the only mutable state (`UsageModel`, `@MainActor`). It keeps the
+last snapshot through idle and failure so the menu dims numbers instead of blanking them. The menu
+bar item is a robot glyph drawn in code, colored by the selected account's `StatusLevel` (grey when
+idle or unknown, green → yellow → orange → red); no text.
+
+The dropdown is a real `NSMenu`, not a `MenuBarExtra(.window)` panel — the HIG asks a menu bar
+extra to show a menu, and only a menu gets the system's attached chrome. Standard items carry the
+commands (Refresh ⌘R, Quit ⌘Q); one custom item hosts `UsageMenuContent` — account picker and usage
+block — in an `NSHostingView`, the way Battery and Wi-Fi show status a plain item cannot. The picker
+is in the custom view because a native item dismisses the menu when picked.
 
 ### Read-only over Claude Code's credentials — never refresh
 
@@ -72,7 +88,9 @@ under codenames (`amber_ladder`, `tangelo`, …) and are almost always `null`. P
 `spend` carries usage credits: `{ enabled, percent, used: { amount_minor, currency, exponent }, limit,
 balance, auto_reload, can_purchase_credits, disabled_reason }`.
 
-The plan label ("max", "team") comes from `subscriptionType` in the Keychain payload, not this response.
+The plan label comes from the Keychain payload, not this response: `subscriptionType` ("max",
+"team") plus the multiplier parsed from `rateLimitTier` (`default_claude_max_20x` → "Max (20x)").
+`spend` carries no reset date; the panel shows only what is present.
 
 ## Code Patterns
 

@@ -12,12 +12,18 @@ public struct OAuthCredentials: Sendable, Equatable {
     /// When the refresh token — the login itself — expires and Claude Code will ask for `/login`.
     public let refreshTokenExpiresAt: Date?
     public let subscriptionType: String?
+    /// Tier code such as `default_claude_max_20x`; the "(20x)" in the plan label comes from here.
+    public let rateLimitTier: String?
 
-    public init(accessToken: String, expiresAt: Date?, refreshTokenExpiresAt: Date? = nil, subscriptionType: String?) {
+    public init(
+        accessToken: String, expiresAt: Date?, refreshTokenExpiresAt: Date? = nil,
+        subscriptionType: String?, rateLimitTier: String? = nil
+    ) {
         self.accessToken = accessToken
         self.expiresAt = expiresAt
         self.refreshTokenExpiresAt = refreshTokenExpiresAt
         self.subscriptionType = subscriptionType
+        self.rateLimitTier = rateLimitTier
     }
 
     public var isExpired: Bool { expiresAt.map { $0 <= Date() } ?? false }
@@ -109,7 +115,8 @@ public struct KeychainCredentialStore: Sendable {
             accessToken: token,
             expiresAt: Self.date(fromMilliseconds: oauth["expiresAt"]),
             refreshTokenExpiresAt: Self.date(fromMilliseconds: oauth["refreshTokenExpiresAt"]),
-            subscriptionType: oauth["subscriptionType"] as? String
+            subscriptionType: oauth["subscriptionType"] as? String,
+            rateLimitTier: oauth["rateLimitTier"] as? String
         )
     }
 
