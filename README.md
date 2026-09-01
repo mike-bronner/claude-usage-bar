@@ -7,15 +7,19 @@ Accounts are discovered by scanning `$HOME` for `.claude*` config directories th
 
 ## Status
 
-Core in place: account discovery, per-directory Keychain credential lookup, usage fetch.
-Menu bar UI pending.
+Core in place: account discovery, per-directory Keychain credential lookup, usage fetch, idle
+detection. Menu bar UI pending.
+
+The app is strictly read-only over Claude Code's credentials — it never refreshes a token, because
+doing so would sign that account out of Claude Code. An account whose token has expired is shown
+as idle until Claude Code is used again.
 
 ## Development
 
 ```bash
 swift build
 swift test
-swift run usage-probe   # inspect live accounts and the raw usage response
+make probe   # inspect live accounts and the raw usage response (codesigned, so the Keychain prompt sticks)
 ```
 
 See [CLAUDE.md](CLAUDE.md) for architecture and the Keychain service-name derivation.

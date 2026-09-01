@@ -7,21 +7,36 @@ Guidance for Claude Code when working in this repository.
 SwiftPM package (no Xcode project — `.xcodeproj` is gitignored). Xcode opens `Package.swift` directly.
 
 - **Build**: `swift build`
-- **Test**: `swift test`
-- **Probe live accounts**: `swift run usage-probe` — prints discovered accounts, resolved Keychain
-  service names, and the raw `/api/oauth/usage` response. Never prints the access token.
+- **Test**: `swift test` — no Keychain or network access; everything is stubbed via `Transport`.
+- **Probe live accounts**: `make probe` — builds, codesigns `usage-probe` with a stable identity, and
+  prints discovered accounts, resolved Keychain service names, and the raw `/api/oauth/usage`
+  response. Never prints any token. (`swift run usage-probe` works too, but its ad-hoc signature
+  changes every build, so the Keychain re-prompts each time.)
 
 Target: macOS 14+, Swift 6 strict concurrency.
 
 ## Architecture
 
-**Data flow**: `~/.claude*` config dirs → `AccountScanner` → `KeychainCredentialStore` → `UsageClient` → menu bar UI
+**Data flow**: `~/.claude*` config dirs → `AccountScanner` → `KeychainCredentialStore` → `AccountUsageProvider` → `UsageClient` → menu bar UI
 
 | Layer | Component | Role |
 |-------|-----------|------|
 | Discovery | `AccountScanner` | Scans `$HOME` for `.claude*` dirs holding a `.claude.json` with an `oauthAccount` |
-| Credentials | `KeychainCredentialStore` | Derives the Keychain service name per config dir, reads the OAuth token |
-| Network | `UsageClient` | `GET https://api.anthropic.com/api/oauth/usage` with a bearer token |
+| Credentials | `KeychainCredentialStore` | Derives the Keychain service names per config dir, reads the freshest OAuth token |
+| Orchestration | `AccountUsageProvider` | Per account: fetch when the token is valid, report `.idle` when it is not |
+| Network | `UsageClient` | `GET https://api.anthropic.com/api/oauth/usage` with a bearer token, over an injectable `Transport` |
+
+### Read-only over Claude Code's credentials — never refresh
+
+**This app never calls the token endpoint.** Verified live on 2026-09-01: refreshing rotates the
+refresh token *and revokes the old one* (a second refresh with the stored token returns HTTP 400).
+Any out-of-process refresh therefore signs that account out of Claude Code on its next use.
+
+An expired access token in the Keychain is not a logout, it is idleness: Claude Code refreshes
+silently on next use and writes the result back. So `AccountUsageProvider` returns
+`.idle(expiredAt:)` and the UI dims the last-known numbers with "please open Claude Code to
+refresh". The real login is the refresh token (`refreshTokenExpiresAt`, weeks out); Claude Code
+itself warns the user three days before it lapses.
 
 ### Keychain service-name derivation
 
@@ -32,8 +47,13 @@ Claude Code decides the service name by whether `CLAUDE_CONFIG_DIR` was set **at
 
 The **presence of the variable** decides, not the path — `CLAUDE_CONFIG_DIR=$HOME/.claude` produces a
 suffixed name for the default directory. We cannot see the logging-in process's environment, so
-`serviceNames(for:)` returns candidates: the default directory tries the bare name first and falls
-back to the suffixed one; every other directory uses the suffixed name only.
+`serviceNames(for:)` returns candidates: both names for the default directory, the suffixed name
+only for every other.
+
+**Both can exist at once**, each an independent token lineage (one login with the variable unset,
+later sessions with it set). `credentials(for:)` reads every existing candidate and returns the
+one with the latest `expiresAt` — the lineage Claude Code is actively using. Taking the first
+match reads a stale lineage and reports a live account as idle.
 
 The Keychain account (`kSecAttrAccount`) is `$USER`.
 
@@ -58,4 +78,6 @@ The plan label ("max", "team") comes from `subscriptionType` in the Keychain pay
 
 - Core types are `Sendable` value types; no shared mutable state outside the UI layer.
 - Keychain and parsing failures throw typed errors (`KeychainError`, `UsageError`) — never fail open.
-- Tests cover derivation, parsing, and rejection paths; they use temporary directories, never `$HOME`.
+  A 401 on a token that looked valid is thrown, not retried.
+- Tests cover derivation, parsing, and rejection paths; they use temporary directories, never `$HOME`,
+  and script HTTP through `StubTransport` rather than touching the network or the Keychain.

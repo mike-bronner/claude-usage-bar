@@ -10,10 +10,10 @@ public enum UsageError: Error {
 public struct UsageClient: Sendable {
     static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
 
-    private let session: URLSession
+    private let transport: any Transport
 
-    public init(session: URLSession = .shared) {
-        self.session = session
+    public init(transport: any Transport = URLSession.shared) {
+        self.transport = transport
     }
 
     /// Returns the raw response body. Callers decode; the shape is captured by `usage-probe`.
@@ -25,7 +25,7 @@ public struct UsageClient: Sendable {
 
         let data: Data, response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            (data, response) = try await transport.data(for: request)
         } catch {
             throw UsageError.transport(error)
         }

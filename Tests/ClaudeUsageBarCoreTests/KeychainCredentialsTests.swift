@@ -15,10 +15,10 @@ final class KeychainCredentialsTests: XCTestCase {
         )
     }
 
-    func testDefaultDirectoryTriesBareServiceFirst() {
+    func testDefaultDirectoryHasBareAndSuffixedCandidates() {
         let names = KeychainCredentialStore.serviceNames(for: Account.defaultConfigDirectory)
         XCTAssertEqual(names.first, "Claude Code-credentials")
-        XCTAssertEqual(names.count, 2, "default dir must also fall back to the suffixed name")
+        XCTAssertEqual(names.count, 2, "default dir must also carry the suffixed name")
         XCTAssertTrue(names[1].hasPrefix("Claude Code-credentials-"))
     }
 
@@ -27,17 +27,57 @@ final class KeychainCredentialsTests: XCTestCase {
         XCTAssertEqual(names, ["Claude Code-credentials-3d38302d"])
     }
 
-    func testDecodeExtractsTokenExpiryAndPlan() throws {
-        let payload = #"{"claudeAiOauth":{"accessToken":"abc123","expiresAt":1788183139338,"subscriptionType":"max"}}"#
+    // MARK: Freshest lineage
+
+    private static func credentials(_ token: String, expiresAt: Date?) -> OAuthCredentials {
+        OAuthCredentials(accessToken: token, expiresAt: expiresAt, subscriptionType: nil)
+    }
+
+    func testFreshestPicksLatestExpiryRegardlessOfOrder() {
+        let stale = Self.credentials("stale", expiresAt: Date(timeIntervalSince1970: 1_000))
+        let fresh = Self.credentials("fresh", expiresAt: Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(KeychainCredentialStore.freshest([stale, fresh])?.accessToken, "fresh")
+        XCTAssertEqual(KeychainCredentialStore.freshest([fresh, stale])?.accessToken, "fresh")
+    }
+
+    func testFreshestKeepsEarlierCandidateOnTie() {
+        let first = Self.credentials("first", expiresAt: Date(timeIntervalSince1970: 1_000))
+        let second = Self.credentials("second", expiresAt: Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(KeychainCredentialStore.freshest([first, second])?.accessToken, "first")
+    }
+
+    func testFreshestPrefersKnownExpiryOverUnknown() {
+        let unknown = Self.credentials("unknown", expiresAt: nil)
+        let known = Self.credentials("known", expiresAt: Date(timeIntervalSince1970: 1))
+        XCTAssertEqual(KeychainCredentialStore.freshest([unknown, known])?.accessToken, "known")
+    }
+
+    func testFreshestOfNothingIsNil() {
+        XCTAssertNil(KeychainCredentialStore.freshest([]))
+    }
+
+    // MARK: Decoding
+
+    func testDecodeExtractsTokenExpiriesAndPlan() throws {
+        let payload = #"""
+        {"claudeAiOauth":{"accessToken":"abc123","expiresAt":1788183139338,"refreshTokenExpiresAt":1789156989659,
+         "refreshToken":"rt-1","scopes":["user:profile"],"subscriptionType":"max"}}
+        """#
         let credentials = try KeychainCredentialStore.decode(Data(payload.utf8))
         XCTAssertEqual(credentials.accessToken, "abc123")
         XCTAssertEqual(credentials.subscriptionType, "max")
         XCTAssertEqual(credentials.expiresAt, Date(timeIntervalSince1970: 1788183139.338))
+        XCTAssertEqual(credentials.refreshTokenExpiresAt, Date(timeIntervalSince1970: 1789156989.659))
     }
 
-    func testDecodeTreatsZeroExpiryAsUnknown() throws {
-        let payload = #"{"claudeAiOauth":{"accessToken":"abc123","expiresAt":0}}"#
-        XCTAssertNil(try KeychainCredentialStore.decode(Data(payload.utf8)).expiresAt)
+    func testDecodeTreatsZeroOrMissingExpiryAsUnknown() throws {
+        let zero = try KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"abc123","expiresAt":0,"refreshTokenExpiresAt":0}}"#.utf8))
+        XCTAssertNil(zero.expiresAt)
+        XCTAssertNil(zero.refreshTokenExpiresAt)
+
+        let missing = try KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"abc123"}}"#.utf8))
+        XCTAssertNil(missing.expiresAt)
+        XCTAssertNil(missing.refreshTokenExpiresAt)
     }
 
     func testDecodeRejectsMissingOAuthObject() {
@@ -51,9 +91,9 @@ final class KeychainCredentialsTests: XCTestCase {
     }
 
     func testIsExpiredReflectsExpiry() {
-        let past = OAuthCredentials(accessToken: "t", expiresAt: Date(timeIntervalSinceNow: -60), subscriptionType: nil)
-        let future = OAuthCredentials(accessToken: "t", expiresAt: Date(timeIntervalSinceNow: 60), subscriptionType: nil)
-        let unknown = OAuthCredentials(accessToken: "t", expiresAt: nil, subscriptionType: nil)
+        let past = Self.credentials("t", expiresAt: Date(timeIntervalSinceNow: -60))
+        let future = Self.credentials("t", expiresAt: Date(timeIntervalSinceNow: 60))
+        let unknown = Self.credentials("t", expiresAt: nil)
         XCTAssertTrue(past.isExpired)
         XCTAssertFalse(future.isExpired)
         XCTAssertFalse(unknown.isExpired)

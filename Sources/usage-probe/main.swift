@@ -2,7 +2,7 @@ import ClaudeUsageBarCore
 import Foundation
 
 // Development probe: confirms account discovery, Keychain lookup, and the shape of the
-// /api/oauth/usage response. Prints usage data and never prints the access token.
+// /api/oauth/usage response. Prints usage data and never prints any token.
 
 let accounts = try AccountScanner().scan()
 guard !accounts.isEmpty else {
@@ -11,6 +11,8 @@ guard !accounts.isEmpty else {
 }
 
 let store = KeychainCredentialStore()
+let provider = AccountUsageProvider()
+let iso = ISO8601DateFormatter()
 
 for account in accounts {
     print("── \(account.displayName) <\(account.emailAddress)>")
@@ -25,14 +27,19 @@ for account in accounts {
         continue
     }
 
-    let expiry = credentials.expiresAt.map(ISO8601DateFormatter().string(from:)) ?? "none"
-    print("   keychain ✅ token \(credentials.accessToken.count) chars · plan \(credentials.subscriptionType ?? "?") · expires \(expiry)")
+    let expiry = credentials.expiresAt.map(iso.string(from:)) ?? "none"
+    let loginExpiry = credentials.refreshTokenExpiresAt.map(iso.string(from:)) ?? "none"
+    print("   keychain ✅ token \(credentials.accessToken.count) chars · plan \(credentials.subscriptionType ?? "?") · expires \(expiry) · login expires \(loginExpiry)")
 
     do {
-        let data = try await UsageClient().fetchRaw(accessToken: credentials.accessToken)
-        let object = try JSONSerialization.jsonObject(with: data)
-        let pretty = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
-        print("   usage    ✅\n\(String(decoding: pretty, as: UTF8.self))")
+        switch try await provider.fetch(for: account).state {
+        case .idle(let expiredAt):
+            print("   usage    ⏸️ idle since \(iso.string(from: expiredAt)) · please open Claude Code to refresh")
+        case .live(let data):
+            let object = try JSONSerialization.jsonObject(with: data)
+            let pretty = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+            print("   usage    ✅\n\(String(decoding: pretty, as: UTF8.self))")
+        }
     } catch {
         print("   usage    ❌ \(error)")
     }
