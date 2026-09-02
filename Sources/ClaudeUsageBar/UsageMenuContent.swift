@@ -11,18 +11,18 @@ struct UsageMenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             accountPicker
-            if let status = model.selectedStatus {
-                header(status)
-                if let snapshot = status.snapshot {
-                    limits(snapshot)
-                        .opacity(status.isIdle ? 0.5 : 1)
-                    if let credits = snapshot.credits {
-                        Divider()
-                        creditsSection(credits)
-                            .opacity(status.isIdle ? 0.5 : 1)
+            // Every account's block is laid out, the unselected ones invisible: an invisible view
+            // still takes its space, so the item is as tall as the tallest account and stays so
+            // when the picker changes, keeping the native items below it in place. Top alignment
+            // pins a shorter account's block to the top of that height.
+            ZStack(alignment: .topLeading) {
+                ForEach(model.accounts) { account in
+                    if let status = model.statuses[account.id] {
+                        let selected = account.id == model.selectedAccount?.id
+                        accountBlock(account, status)
+                            .opacity(selected ? 1 : 0)
+                            .accessibilityHidden(!selected)
                     }
-                } else if case .loading = status.condition {
-                    ProgressView().controlSize(.small)
                 }
             }
             footer
@@ -33,6 +33,29 @@ struct UsageMenuContent: View {
         .padding(.trailing, 12)
         .padding(.vertical, 6)
         .frame(width: 330, alignment: .leading)
+        // The hosting view resizes to fit, but a frame change lands a beat after the content's:
+        // top alignment keeps the block pinned to the top for that beat instead of letting it
+        // drift into the middle of the previous height.
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Everything the menu shows for one account: header, limits, credits.
+    private func accountBlock(_ account: Account, _ status: UsageModel.Status) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            header(account, status)
+            if let snapshot = status.snapshot {
+                limits(snapshot)
+                    .opacity(status.isIdle ? 0.5 : 1)
+                if let credits = snapshot.credits {
+                    Divider()
+                    creditsSection(credits)
+                        .opacity(status.isIdle ? 0.5 : 1)
+                }
+            } else if case .loading = status.condition {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Sections
@@ -82,10 +105,10 @@ struct UsageMenuContent: View {
         }
     }
 
-    private func header(_ status: UsageModel.Status) -> some View {
+    private func header(_ account: Account, _ status: UsageModel.Status) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text(model.selectedAccount?.emailAddress ?? "")
+                Text(account.emailAddress)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)

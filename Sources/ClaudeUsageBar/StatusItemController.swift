@@ -14,13 +14,13 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let model: UsageModel
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
-    private let usageView: NSHostingView<UsageMenuContent>
+    private let usageView: SelfSizingHostingView<UsageMenuContent>
     private var poller: Task<Void, Never>?
 
     init(model: UsageModel) {
         self.model = model
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        usageView = NSHostingView(rootView: UsageMenuContent(model: model))
+        usageView = SelfSizingHostingView(rootView: UsageMenuContent(model: model))
         super.init()
 
         menu.delegate = self
@@ -50,7 +50,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func rebuildMenu() {
         menu.removeAllItems()
-        usageView.frame.size = usageView.fittingSize
+        usageView.fitToContent()
         let usage = NSMenuItem()
         usage.view = usageView
         menu.addItem(usage)
