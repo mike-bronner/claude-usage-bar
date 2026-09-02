@@ -1,5 +1,6 @@
 import AppKit
 import ClaudeUsageBarCore
+import ServiceManagement
 import SwiftUI
 
 /// The menu bar item and its menu — a real `NSMenu`, as the HIG asks of a menu bar extra.
@@ -22,8 +23,6 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         menu.delegate = self
-        // Accounts are picked inside the custom view, so no item carries a checkmark.
-        menu.showsStateColumn = false
         statusItem.menu = menu
         rebuildMenu()
         trackIcon()
@@ -62,6 +61,10 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         let refresh = NSMenuItem(title: "Refresh", action: #selector(refresh(_:)), keyEquivalent: "r")
         refresh.target = self
         menu.addItem(refresh)
+        let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
+        login.target = self
+        login.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        menu.addItem(login)
         let quit = NSMenuItem(title: "Quit Claude Usage Bar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
     }
@@ -74,5 +77,22 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func refresh(_ sender: Any?) {
         Task { await model.refreshAll() }
+    }
+
+    /// Registers or unregisters the app as a login item. Only a bundled app can register; the
+    /// unbundled dev binary gets the system's error, shown rather than swallowed.
+    @objc private func toggleLaunchAtLogin(_ sender: NSMenuItem) {
+        do {
+            if SMAppService.mainApp.status == .enabled {
+                try SMAppService.mainApp.unregister()
+            } else {
+                try SMAppService.mainApp.register()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Couldn't change Launch at Login"
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
+        }
     }
 }

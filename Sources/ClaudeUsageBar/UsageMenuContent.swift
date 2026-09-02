@@ -26,9 +26,9 @@ struct UsageMenuContent: View {
                 }
             }
         }
-        // Native items (with the state column hidden) indent 14 pt and end 12 pt short of the
-        // edge; line up with them.
-        .padding(.leading, 14)
+        // Native items indent 30 pt for the state column and end 12 pt short of the edge; line up
+        // with them.
+        .padding(.leading, 30)
         .padding(.trailing, 12)
         .padding(.vertical, 6)
         .frame(width: 330, alignment: .leading)

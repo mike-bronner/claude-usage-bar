@@ -8,6 +8,7 @@ let package = Package(
         .target(name: "ClaudeUsageBarCore"),
         .executableTarget(name: "ClaudeUsageBar", dependencies: ["ClaudeUsageBarCore"]),
         .executableTarget(name: "usage-probe", dependencies: ["ClaudeUsageBarCore"]),
+        .executableTarget(name: "render-icon", dependencies: ["ClaudeUsageBarCore"]),
         .testTarget(name: "ClaudeUsageBarCoreTests", dependencies: ["ClaudeUsageBarCore"]),
         .testTarget(name: "ClaudeUsageBarTests", dependencies: ["ClaudeUsageBar"]),
     ]

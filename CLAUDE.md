@@ -10,6 +10,11 @@ SwiftPM package (no Xcode project — `.xcodeproj` is gitignored). Xcode opens `
 - **Test**: `swift test` — no Keychain or network access; everything is stubbed via `Transport`.
 - **Run the app (dev)**: `make run` — builds, codesigns `ClaudeUsageBar` with a stable identity, and
   runs it unbundled. It hides its Dock icon itself until `make bundle` supplies `LSUIElement`.
+- **Bundle**: `make bundle` — release build → `.build/ClaudeUsageBar.app` with `Support/Info.plist`
+  (`LSUIElement`, `CFBundleVersion` = commit count), an icon rendered by `render-icon` from the same
+  `RobotGlyph` as the menu bar item, signed with the stable identity and verified.
+- **Install**: `make install` — bundles, replaces `/Applications/ClaudeUsageBar.app`, launches it.
+  "Launch at Login" in the menu uses `SMAppService`; it only works from a bundle.
 - **Probe live accounts**: `make probe` — same for `usage-probe`, which prints discovered accounts,
   resolved Keychain service names, and the raw `/api/oauth/usage` response. Never prints any token.
   (`swift run …` works too, but its ad-hoc signature changes every build, so the Keychain
