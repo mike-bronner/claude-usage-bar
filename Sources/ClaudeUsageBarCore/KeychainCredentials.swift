@@ -41,7 +41,7 @@ public enum KeychainError: Error, Equatable {
 /// when the login happened: unset yields the bare `Claude Code-credentials`, set yields
 /// `Claude Code-credentials-<first 8 hex of sha256(NFC(configDirPath))>`. We cannot read the
 /// environment of the process that logged in, so we derive candidates from the directory path.
-/// Several can exist at once, each an independent token lineage; the freshest is the one in use.
+/// Several can exist at once, each an independent token lineage.
 public struct KeychainCredentialStore: Sendable {
     static let serviceBase = "Claude Code-credentials"
 
@@ -67,24 +67,35 @@ public struct KeychainCredentialStore: Sendable {
         return digest.map { String(format: "%02x", $0) }.joined().prefix(8).description
     }
 
-    /// Reads every existing candidate and returns the freshest; a missing candidate is fine, an
-    /// unreadable or malformed one is not.
+    /// Reads candidates in order and stops at the first valid token. Every read of an item this
+    /// app did not create costs the user a Keychain prompt, so no entry is read unless the ones
+    /// before it are expired; among expired entries the freshest wins. A missing candidate is
+    /// fine, an unreadable or malformed one is not.
     public func credentials(for configDirectory: URL) throws -> OAuthCredentials {
-        let candidates = Self.serviceNames(for: configDirectory)
-        var found: [OAuthCredentials] = []
-        for service in candidates {
+        try Self.select(from: Self.serviceNames(for: configDirectory)) { service in
             let (data, status) = read(service: service)
-            if let data {
-                found.append(try Self.decode(data))
-            } else if status != errSecItemNotFound {
+            guard let data else {
+                if status == errSecItemNotFound { return nil }
                 throw KeychainError.unreadable(status)
             }
+            return try Self.decode(data)
         }
-        guard let freshest = Self.freshest(found) else { throw KeychainError.notFound(services: candidates) }
+    }
+
+    /// The selection rule, separated from the Keychain so it can be tested: `read` returns nil
+    /// for a missing entry.
+    static func select(from services: [String], read: (String) throws -> OAuthCredentials?) throws -> OAuthCredentials {
+        var expired: [OAuthCredentials] = []
+        for service in services {
+            guard let credentials = try read(service) else { continue }
+            if !credentials.isExpired { return credentials }
+            expired.append(credentials)
+        }
+        guard let freshest = Self.freshest(expired) else { throw KeychainError.notFound(services: services) }
         return freshest
     }
 
-    /// The lineage Claude Code is actively using is the one with the latest expiry. Ties keep the
+    /// Among expired lineages, the one Claude Code used last has the latest expiry. Ties keep the
     /// earlier candidate; an unknown expiry loses to any known one.
     static func freshest(_ candidates: [OAuthCredentials]) -> OAuthCredentials? {
         candidates.max { ($0.expiresAt ?? .distantPast) < ($1.expiresAt ?? .distantPast) }

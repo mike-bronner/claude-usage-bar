@@ -56,6 +56,61 @@ final class KeychainCredentialsTests: XCTestCase {
         XCTAssertNil(KeychainCredentialStore.freshest([]))
     }
 
+    // MARK: Selection — every read costs the user a Keychain prompt
+
+    private final class Reads {
+        var services: [String] = []
+    }
+
+    private func select(_ entries: [String: OAuthCredentials?], order: [String], reads: Reads) throws -> OAuthCredentials {
+        try KeychainCredentialStore.select(from: order) { service in
+            reads.services.append(service)
+            return entries[service] ?? nil
+        }
+    }
+
+    func testSelectStopsAtFirstValidEntryWithoutReadingTheRest() throws {
+        let reads = Reads()
+        let valid = Self.credentials("valid", expiresAt: Date(timeIntervalSinceNow: 3600))
+        let picked = try select(["bare": valid, "suffixed": Self.credentials("other", expiresAt: Date(timeIntervalSinceNow: 7200))], order: ["bare", "suffixed"], reads: reads)
+        XCTAssertEqual(picked.accessToken, "valid")
+        XCTAssertEqual(reads.services, ["bare"], "the second entry must not be read — it would prompt")
+    }
+
+    func testSelectSkipsExpiredEntryForALaterValidOne() throws {
+        let reads = Reads()
+        let stale = Self.credentials("stale", expiresAt: Date(timeIntervalSinceNow: -60))
+        let valid = Self.credentials("valid", expiresAt: Date(timeIntervalSinceNow: 3600))
+        let picked = try select(["bare": stale, "suffixed": valid], order: ["bare", "suffixed"], reads: reads)
+        XCTAssertEqual(picked.accessToken, "valid")
+        XCTAssertEqual(reads.services, ["bare", "suffixed"])
+    }
+
+    func testSelectReturnsFreshestWhenAllExpired() throws {
+        let older = Self.credentials("older", expiresAt: Date(timeIntervalSinceNow: -7200))
+        let newer = Self.credentials("newer", expiresAt: Date(timeIntervalSinceNow: -60))
+        let picked = try select(["bare": older, "suffixed": newer], order: ["bare", "suffixed"], reads: Reads())
+        XCTAssertEqual(picked.accessToken, "newer")
+    }
+
+    func testSelectSkipsMissingEntries() throws {
+        let valid = Self.credentials("valid", expiresAt: Date(timeIntervalSinceNow: 3600))
+        let picked = try select(["suffixed": valid], order: ["bare", "suffixed"], reads: Reads())
+        XCTAssertEqual(picked.accessToken, "valid")
+    }
+
+    func testSelectThrowsNotFoundListingAllCandidates() {
+        XCTAssertThrowsError(try select([:], order: ["bare", "suffixed"], reads: Reads())) { error in
+            XCTAssertEqual(error as? KeychainError, .notFound(services: ["bare", "suffixed"]))
+        }
+    }
+
+    func testSelectPropagatesReadFailure() {
+        XCTAssertThrowsError(try KeychainCredentialStore.select(from: ["bare"]) { _ in throw KeychainError.unreadable(-25293) }) { error in
+            XCTAssertEqual(error as? KeychainError, .unreadable(-25293))
+        }
+    }
+
     // MARK: Decoding
 
     func testDecodeExtractsTokenExpiriesAndPlan() throws {

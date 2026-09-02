@@ -5,9 +5,10 @@ import SwiftUI
 
 /// The menu bar item and its menu — a real `NSMenu`, as the HIG asks of a menu bar extra.
 ///
-/// Standard items do the commands (refresh, quit); one custom item hosts the account picker and
-/// the usage block, the way Battery and Wi-Fi show status a plain item cannot. The picker lives in
-/// the custom view because a native item dismisses the menu when picked.
+/// Standard items do the commands that may close the menu (quit, launch at login); one custom item
+/// hosts the account picker, the usage block, and Refresh, the way Battery and Wi-Fi show status a
+/// plain item cannot. Picker and Refresh live in the custom view because a native item dismisses
+/// the menu when picked.
 @MainActor
 final class StatusItemController: NSObject, NSMenuDelegate {
     private let model: UsageModel
@@ -55,11 +56,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         menu.addItem(usage)
         menu.addItem(.separator())
 
-        if let refreshed = model.lastRefresh {
-            menu.addItem(Self.disabledItem("Updated \(refreshed.formatted(date: .omitted, time: .shortened))"))
-        }
+        // The visible Refresh is a button in the custom view so the menu stays open; this hidden
+        // item only gives ⌘R a home.
         let refresh = NSMenuItem(title: "Refresh", action: #selector(refresh(_:)), keyEquivalent: "r")
         refresh.target = self
+        refresh.isHidden = true
         menu.addItem(refresh)
         let login = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin(_:)), keyEquivalent: "")
         login.target = self

@@ -72,9 +72,21 @@ suffixed name for the default directory. We cannot see the logging-in process's 
 only for every other.
 
 **Both can exist at once**, each an independent token lineage (one login with the variable unset,
-later sessions with it set). `credentials(for:)` reads every existing candidate and returns the
-one with the latest `expiresAt` — the lineage Claude Code is actively using. Taking the first
-match reads a stale lineage and reports a live account as idle.
+later sessions with it set). `credentials(for:)` reads candidates in order and **stops at the first
+valid token**; only if that one is expired does it read the next, and among all-expired entries the
+latest `expiresAt` wins. Two reasons: taking the first match blindly read a stale lineage and
+reported a live account as idle, and every read of an item this app did not create costs the user
+a Keychain prompt (see below), so nothing is read that isn't needed.
+
+### The Keychain prompt
+
+Reading another app's Keychain item triggers macOS's *"wants to use your confidential
+information"* dialog; *Always Allow* needs the login password because it edits the item's ACL.
+That is unavoidable — on macOS the token exists only in the Keychain (Claude Code's other backend
+is a plaintext `.credentials.json`, which is worse). It is once per item per code identity, so a
+stable signature (`make bundle`, `make run`) matters, and the app explains the dialog in an alert
+before the first read. Never modify the item's ACL or partition list to avoid it: that is a write
+to Claude Code's entry.
 
 The Keychain account (`kSecAttrAccount`) is `$USER`.
 

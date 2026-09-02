@@ -25,6 +25,7 @@ struct UsageMenuContent: View {
                     ProgressView().controlSize(.small)
                 }
             }
+            footer
         }
         // Native items indent 30 pt for the state column and end 12 pt short of the edge; line up
         // with them.
@@ -35,6 +36,20 @@ struct UsageMenuContent: View {
     }
 
     // MARK: Sections
+
+    /// A button, not a menu item: a native item dismisses the menu, a click in here does not.
+    private var footer: some View {
+        HStack {
+            if let refreshed = model.lastRefresh {
+                Text("Updated \(refreshed, style: .time)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Refresh") { Task { await model.refreshAll() } }
+                .controlSize(.small)
+        }
+    }
 
     /// Buttons rather than menu items: a native item dismisses the menu when picked, a click
     /// inside a custom view does not.
