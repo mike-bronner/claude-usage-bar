@@ -154,3 +154,70 @@ final class KeychainCredentialsTests: XCTestCase {
         XCTAssertFalse(unknown.isExpired)
     }
 }
+
+// MARK: - Reading through /usr/bin/security
+
+final class KeychainToolReadTests: XCTestCase {
+    private static let payload = Data(#"{"claudeAiOauth":{"accessToken":"abc123","expiresAt":1788183139338,"subscriptionType":"max"}}"#.utf8)
+
+    private final class Calls: @unchecked Sendable {
+        var arguments: [[String]] = []
+    }
+
+    /// A store whose tool is scripted: `respond` maps the service name to (stdout, exit code).
+    private func store(_ calls: Calls, respond: @escaping @Sendable (String) -> (Data, Int32)) -> KeychainCredentialStore {
+        KeychainCredentialStore(account: "mike") { arguments in
+            calls.arguments.append(arguments)
+            let service = arguments[arguments.firstIndex(of: "-s")! + 1]
+            return respond(service)
+        }
+    }
+
+    func testReadPassesAccountAndServiceAndNeverTheSecret() throws {
+        let calls = Calls()
+        let store = store(calls) { _ in (Self.payload + Data("\n".utf8), 0) }
+        _ = try store.read(service: "Claude Code-credentials-3d38302d")
+        XCTAssertEqual(calls.arguments, [["find-generic-password", "-a", "mike", "-s", "Claude Code-credentials-3d38302d", "-w"]])
+    }
+
+    func testTextOutputIsReturnedWithoutTrailingNewline() throws {
+        let store = store(Calls()) { _ in (Self.payload + Data("\n".utf8), 0) }
+        XCTAssertEqual(try store.read(service: "any"), Self.payload)
+    }
+
+    func testHexOutputIsDecoded() throws {
+        let hex = Self.payload.map { String(format: "%02x", $0) }.joined() + "\n"
+        let store = store(Calls()) { _ in (Data(hex.utf8), 0) }
+        XCTAssertEqual(try store.read(service: "any"), Self.payload)
+    }
+
+    func testExit44IsAMissingItem() throws {
+        let store = store(Calls()) { _ in (Data(), 44) }
+        XCTAssertNil(try store.read(service: "any"))
+    }
+
+    func testExit36IsUnreadableNotAFallback() {
+        let calls = Calls()
+        let store = store(calls) { _ in (Data(), 36) }
+        XCTAssertThrowsError(try store.read(service: "any")) { error in
+            XCTAssertEqual(error as? KeychainError, .unreadable(36))
+        }
+        XCTAssertEqual(calls.arguments.count, 1, "a locked Keychain must not fall through to a prompting read")
+    }
+
+    func testMissingBareEntryFallsThroughToSuffixedCandidate() throws {
+        let calls = Calls()
+        let store = store(calls) { service in service.hasSuffix("-fb39db7b") ? (Self.payload, 0) : (Data(), 44) }
+        let credentials = try store.credentials(for: URL(filePath: "/Users/mike/.claude"))
+        XCTAssertEqual(credentials.accessToken, "abc123")
+        XCTAssertEqual(calls.arguments.count, 2)
+    }
+
+    func testSecretDecodingHelpers() {
+        XCTAssertEqual(KeychainCredentialStore.secret(from: Data("{\"a\":1}\r\n".utf8)), Data("{\"a\":1}".utf8))
+        XCTAssertEqual(KeychainCredentialStore.hexDecoded(Data("7b7d".utf8)), Data("{}".utf8))
+        XCTAssertNil(KeychainCredentialStore.hexDecoded(Data("7b7".utf8)), "odd length is not hex")
+        XCTAssertNil(KeychainCredentialStore.hexDecoded(Data("zz".utf8)), "non-hex bytes are not hex")
+        XCTAssertNil(KeychainCredentialStore.hexDecoded(Data()))
+    }
+}

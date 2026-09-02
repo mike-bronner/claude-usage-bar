@@ -71,23 +71,16 @@ make install      # builds, signs, copies to /Applications, launches
 `make install` signs with your own Apple Development identity (`security find-identity -v -p
 codesigning`; override with `SIGN_IDENTITY=<sha1>`). Turn on **Launch at Login** from the menu.
 
-### About the Keychain prompt
+### About the Keychain
 
-On first launch macOS shows, once per account:
-
-> **ClaudeUsageBar wants to use your confidential information stored in "Claude Code-credentials"
-> in your keychain.** To allow this, enter the login keychain password.
-
-This is the standard dialog for any app that reads a Keychain item another app created — here,
-the login token Claude Code stored when you signed in. The password is required only because
-**Always Allow** edits that item's access list; choose it and you won't be asked again. Nothing else
-in the app touches the Keychain, and the token exists nowhere else on macOS (Claude Code's only
-alternative is a plaintext file, which would be far worse).
-
-The app explains this in a dialog before the first prompt. The entire Keychain code is
+The token lives only in your login Keychain, in the item Claude Code wrote when you signed in.
+The app reads it the way Claude Code itself does, through `/usr/bin/security`, so macOS shows no
+"wants to use your confidential information" dialog: no password, nothing to click through, and
+nothing survives that a token rotation would undo. (A direct read through the Security framework
+loses its *Always Allow* grant every time Claude Code rotates the token — that is why earlier
+builds asked every couple of hours.) The entire Keychain code is
 [`KeychainCredentials.swift`](Sources/ClaudeUsageBarCore/KeychainCredentials.swift) — one read,
-no writes. It also reads as few items as it can: for the default account it stops at the first
-valid entry, so most people see exactly one prompt per account.
+no writes, and only the items it needs.
 
 ## Development
 

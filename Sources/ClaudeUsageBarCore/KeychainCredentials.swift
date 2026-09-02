@@ -42,13 +42,45 @@ public enum KeychainError: Error, Equatable {
 /// `Claude Code-credentials-<first 8 hex of sha256(NFC(configDirPath))>`. We cannot read the
 /// environment of the process that logged in, so we derive candidates from the directory path.
 /// Several can exist at once, each an independent token lineage.
+///
+/// The read goes through `/usr/bin/security`, not `SecItemCopyMatching`. Claude Code writes the
+/// item with `security add-generic-password -U`, and that update resets the item's partition list
+/// to `apple-tool:`, dropping the `teamid:` grant an "Always Allow" had added — so a direct read
+/// re-prompted (password included) after every token rotation. The `security` tool sits in
+/// `apple-tool:` itself, so a read through it never prompts; it is how Claude Code reads its own
+/// token. Verified 2026-09-02.
 public struct KeychainCredentialStore: Sendable {
     static let serviceBase = "Claude Code-credentials"
 
-    private let account: String
+    /// Runs `/usr/bin/security` with `arguments`, returning its standard output and exit status.
+    /// Injected so tests never touch the Keychain.
+    public typealias ToolRunner = @Sendable (_ arguments: [String]) throws -> (output: Data, exitCode: Int32)
 
-    public init(account: String = ProcessInfo.processInfo.environment["USER"] ?? NSUserName()) {
+    private let account: String
+    private let runTool: ToolRunner
+
+    public init(
+        account: String = ProcessInfo.processInfo.environment["USER"] ?? NSUserName(),
+        runTool: @escaping ToolRunner = Self.runSecurityTool
+    ) {
         self.account = account
+        self.runTool = runTool
+    }
+
+    /// Spawns `/usr/bin/security`. The secret arrives on stdout, never in `argv`, so `ps` shows
+    /// only the account and service names. Blocks for the tool's run (≈0.4 s); callers are off
+    /// the main thread.
+    public static let runSecurityTool: ToolRunner = { arguments in
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = arguments
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        let output = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (output, process.terminationStatus)
     }
 
     /// Service-name candidates for a config directory. Only the default directory can carry the
@@ -67,18 +99,60 @@ public struct KeychainCredentialStore: Sendable {
         return digest.map { String(format: "%02x", $0) }.joined().prefix(8).description
     }
 
-    /// Reads candidates in order and stops at the first valid token. Every read of an item this
-    /// app did not create costs the user a Keychain prompt, so no entry is read unless the ones
-    /// before it are expired; among expired entries the freshest wins. A missing candidate is
-    /// fine, an unreadable or malformed one is not.
+    /// Reads candidates in order and stops at the first valid token, so nothing is read that
+    /// isn't needed; among expired entries the freshest wins. A missing candidate is fine, an
+    /// unreadable or malformed one is not.
     public func credentials(for configDirectory: URL) throws -> OAuthCredentials {
         try Self.select(from: Self.serviceNames(for: configDirectory)) { service in
-            let (data, status) = read(service: service)
-            guard let data else {
-                if status == errSecItemNotFound { return nil }
-                throw KeychainError.unreadable(status)
-            }
-            return try Self.decode(data)
+            try read(service: service).map(Self.decode)
+        }
+    }
+
+    /// The tool exits with the `OSStatus` it hit: 44 is `errSecItemNotFound`, 36 is
+    /// `errSecInteractionNotAllowed` (login Keychain locked, and no terminal to unlock it in),
+    /// which is transient — the UI keeps its last snapshot. Any other failure, including a tool
+    /// that will not launch, falls back to the direct read, so a future Claude Code that stores
+    /// the item some other way degrades to a prompt rather than a blank menu.
+    func read(service: String) throws -> Data? {
+        let arguments = ["find-generic-password", "-a", account, "-s", service, "-w"]
+        guard let (output, exitCode) = try? runTool(arguments) else { return try readDirectly(service: service) }
+        switch exitCode {
+        case 0: return Self.secret(from: output)
+        case Self.toolItemNotFound: return nil
+        case Self.toolInteractionNotAllowed: throw KeychainError.unreadable(exitCode)
+        default: return try readDirectly(service: service)
+        }
+    }
+
+    static let toolItemNotFound: Int32 = 44
+    static let toolInteractionNotAllowed: Int32 = 36
+
+    /// `-w` prints the secret followed by a newline — as text when it is printable, as hex
+    /// otherwise. Claude Code's payload is JSON, so text is the norm; hex is decoded in case.
+    static func secret(from output: Data) -> Data {
+        var bytes = output
+        while let last = bytes.last, last == UInt8(ascii: "\n") || last == UInt8(ascii: "\r") { bytes.removeLast() }
+        return hexDecoded(bytes) ?? bytes
+    }
+
+    /// Nil unless every byte is a hex digit; JSON starts with `{`, so it can never be mistaken.
+    static func hexDecoded(_ bytes: Data) -> Data? {
+        guard !bytes.isEmpty, bytes.count.isMultiple(of: 2) else { return nil }
+        var decoded = Data(capacity: bytes.count / 2)
+        var iterator = bytes.makeIterator()
+        while let high = iterator.next(), let low = iterator.next() {
+            guard let high = nibble(high), let low = nibble(low) else { return nil }
+            decoded.append(high << 4 | low)
+        }
+        return decoded
+    }
+
+    private static func nibble(_ byte: UInt8) -> UInt8? {
+        switch byte {
+        case UInt8(ascii: "0")...UInt8(ascii: "9"): byte - UInt8(ascii: "0")
+        case UInt8(ascii: "a")...UInt8(ascii: "f"): byte - UInt8(ascii: "a") + 10
+        case UInt8(ascii: "A")...UInt8(ascii: "F"): byte - UInt8(ascii: "A") + 10
+        default: nil
         }
     }
 
@@ -101,7 +175,8 @@ public struct KeychainCredentialStore: Sendable {
         candidates.max { ($0.expiresAt ?? .distantPast) < ($1.expiresAt ?? .distantPast) }
     }
 
-    private func read(service: String) -> (data: Data?, status: OSStatus) {
+    /// The fallback: `SecItemCopyMatching` prompts once per token rotation (see the type comment).
+    private func readDirectly(service: String) throws -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -111,8 +186,9 @@ public struct KeychainCredentialStore: Sendable {
         ]
         var item: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return (nil, status) }
-        return (data, status)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = item as? Data else { throw KeychainError.unreadable(status) }
+        return data
     }
 
     static func decode(_ data: Data) throws -> OAuthCredentials {

@@ -17,8 +17,8 @@ SwiftPM package (no Xcode project — `.xcodeproj` is gitignored). Xcode opens `
   "Launch at Login" in the menu uses `SMAppService`; it only works from a bundle.
 - **Probe live accounts**: `make probe` — same for `usage-probe`, which prints discovered accounts,
   resolved Keychain service names, and the raw `/api/oauth/usage` response. Never prints any token.
-  (`swift run …` works too, but its ad-hoc signature changes every build, so the Keychain
-  re-prompts each time.)
+  (`swift run …` works too; the stable signature is for `SMAppService` and a consistent identity,
+  not for the Keychain.)
 
 Target: macOS 14+, Swift 6 strict concurrency.
 
@@ -75,20 +75,35 @@ only for every other.
 later sessions with it set). `credentials(for:)` reads candidates in order and **stops at the first
 valid token**; only if that one is expired does it read the next, and among all-expired entries the
 latest `expiresAt` wins. Two reasons: taking the first match blindly read a stale lineage and
-reported a live account as idle, and every read of an item this app did not create costs the user
-a Keychain prompt (see below), so nothing is read that isn't needed.
+reported a live account as idle, and each read is a process spawn, so nothing is read that isn't
+needed.
 
-### The Keychain prompt
+### Reading through `/usr/bin/security`, not `SecItemCopyMatching`
 
-Reading another app's Keychain item triggers macOS's *"wants to use your confidential
-information"* dialog; *Always Allow* needs the login password because it edits the item's ACL.
-That is unavoidable — on macOS the token exists only in the Keychain (Claude Code's other backend
-is a plaintext `.credentials.json`, which is worse). It is once per item per code identity, so a
-stable signature (`make bundle`, `make run`) matters, and the app explains the dialog in an alert
-before the first read. Never modify the item's ACL or partition list to avoid it: that is a write
-to Claude Code's entry.
+The read spawns `security find-generic-password -a $USER -s <service> -w` and takes the secret
+from stdout (never argv). Reason, verified 2026-09-02 on throwaway items:
 
-The Keychain account (`kSecAttrAccount`) is `$USER`.
+- Claude Code stores every rotated token with `security add-generic-password -U`. That in-place
+  update keeps the item's trusted-app ACL but **resets its partition list to `apple-tool:`**,
+  dropping the `teamid:` entry that *Always Allow* (the password step) had added. The partition
+  list is what gates a non-Apple app, so a direct `SecItemCopyMatching` re-prompted, password and
+  all, after every token rotation — roughly every couple of hours per account.
+- `/usr/bin/security` is itself in `apple-tool:`, so a read through it never prompts. It is how
+  Claude Code reads its own token on every launch. The known caveat: this is a hole in the Keychain
+  model (any local process can read a `security`-created item this way); Claude Code's storage
+  already rests on it, so this app adds no exposure that did not exist.
+
+Exit codes are the `OSStatus` the tool hit: 44 (`errSecItemNotFound`) means "try the next
+candidate"; 36 (`errSecInteractionNotAllowed`, login Keychain locked) is thrown as
+`unreadable(36)`, transient, the UI keeps its last snapshot. Anything else falls back to the
+direct `SecItemCopyMatching` read once, so a future Claude Code that stores the item some other
+way degrades to a prompt rather than a blank menu. `-w` prints hex for non-printable secrets;
+`secret(from:)` decodes it, though Claude Code's payload is JSON and arrives as text.
+
+Never modify the item's ACL or partition list: that is a write to Claude Code's entry, and the
+next `-U` would erase it anyway.
+
+The Keychain account (`-a`) is `$USER`.
 
 ### Usage response shape
 
