@@ -63,7 +63,7 @@ keeps the last snapshot through throttling so the menu never goes blank.
 Requires macOS 14 or later and at least one Claude Code login on the machine.
 
 ```bash
-git clone https://github.com/mikebronner/claude-usage-bar.git
+git clone https://github.com/mike-bronner/claude-usage-bar.git
 cd claude-usage-bar
 make install      # builds, signs, copies to /Applications, launches
 ```
