@@ -118,7 +118,7 @@ final class KeychainCredentialsTests: XCTestCase {
         {"claudeAiOauth":{"accessToken":"abc123","expiresAt":1788183139338,"refreshTokenExpiresAt":1789156989659,
          "refreshToken":"rt-1","scopes":["user:profile"],"subscriptionType":"max"}}
         """#
-        let credentials = try KeychainCredentialStore.decode(Data(payload.utf8))
+        let credentials = try XCTUnwrap(KeychainCredentialStore.decode(Data(payload.utf8)))
         XCTAssertEqual(credentials.accessToken, "abc123")
         XCTAssertEqual(credentials.subscriptionType, "max")
         XCTAssertEqual(credentials.expiresAt, Date(timeIntervalSince1970: 1788183139.338))
@@ -126,23 +126,43 @@ final class KeychainCredentialsTests: XCTestCase {
     }
 
     func testDecodeTreatsZeroOrMissingExpiryAsUnknown() throws {
-        let zero = try KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"abc123","expiresAt":0,"refreshTokenExpiresAt":0}}"#.utf8))
+        let zero = try XCTUnwrap(KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"abc123","expiresAt":0,"refreshTokenExpiresAt":0}}"#.utf8)))
         XCTAssertNil(zero.expiresAt)
         XCTAssertNil(zero.refreshTokenExpiresAt)
 
-        let missing = try KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"abc123"}}"#.utf8))
+        let missing = try XCTUnwrap(KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"abc123"}}"#.utf8)))
         XCTAssertNil(missing.expiresAt)
         XCTAssertNil(missing.refreshTokenExpiresAt)
     }
 
+    // A format change must stay loud: these three are the app's only warning that Claude Code
+    // moved the payload, so each one keeps throwing.
+
     func testDecodeRejectsMissingOAuthObject() {
         let payload = #"{"somethingElse":{"accessToken":"abc123"}}"#
-        XCTAssertThrowsError(try KeychainCredentialStore.decode(Data(payload.utf8)))
+        XCTAssertThrowsError(try KeychainCredentialStore.decode(Data(payload.utf8))) { error in
+            XCTAssertEqual(error as? KeychainError, .malformedPayload)
+        }
     }
 
-    func testDecodeRejectsEmptyToken() {
-        let payload = #"{"claudeAiOauth":{"accessToken":""}}"#
-        XCTAssertThrowsError(try KeychainCredentialStore.decode(Data(payload.utf8)))
+    func testDecodeRejectsUnparseablePayload() {
+        XCTAssertThrowsError(try KeychainCredentialStore.decode(Data("not json at all".utf8))) { error in
+            XCTAssertEqual(error as? KeychainError, .malformedPayload)
+        }
+    }
+
+    func testDecodeRejectsTokenOfTheWrongType() {
+        let payload = #"{"claudeAiOauth":{"accessToken":42}}"#
+        XCTAssertThrowsError(try KeychainCredentialStore.decode(Data(payload.utf8))) { error in
+            XCTAssertEqual(error as? KeychainError, .malformedPayload)
+        }
+    }
+
+    /// A blank or absent token is a signed-out lineage, not corruption: it carries no credentials,
+    /// exactly like a Keychain item that is not there, so the caller skips to the next candidate.
+    func testDecodeTreatsBlankOrAbsentTokenAsNoCredentials() throws {
+        XCTAssertNil(try KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"accessToken":"","expiresAt":0}}"#.utf8)))
+        XCTAssertNil(try KeychainCredentialStore.decode(Data(#"{"claudeAiOauth":{"expiresAt":0}}"#.utf8)))
     }
 
     func testIsExpiredReflectsExpiry() {
@@ -211,6 +231,51 @@ final class KeychainToolReadTests: XCTestCase {
         let credentials = try store.credentials(for: URL(filePath: "/Users/mike/.claude"))
         XCTAssertEqual(credentials.accessToken, "abc123")
         XCTAssertEqual(calls.arguments.count, 2)
+    }
+
+    // MARK: A signed-out lineage in front of the live one
+
+    /// The bare entry as it read live on 2026-09-17: well-formed, every key present, token blank.
+    private static let signedOutPayload = Data(
+        #"{"claudeAiOauth":{"accessToken":"","expiresAt":0,"refreshTokenExpiresAt":1789156989659,"subscriptionType":"max"}}"#.utf8
+    )
+
+    private static func livePayload(token: String) -> Data {
+        let expiresAt = (Date(timeIntervalSinceNow: 3600).timeIntervalSince1970 * 1000).rounded()
+        return Data(#"{"claudeAiOauth":{"accessToken":"\#(token)","expiresAt":\#(expiresAt),"subscriptionType":"max"}}"#.utf8)
+    }
+
+    private static var defaultDirectory: URL { Account.defaultConfigDirectory }
+
+    func testSignedOutFirstCandidateFallsThroughToTheLiveOne() throws {
+        let calls = Calls()
+        let store = store(calls) { service in
+            service == KeychainCredentialStore.serviceBase ? (Self.signedOutPayload, 0) : (Self.livePayload(token: "live"), 0)
+        }
+        let credentials = try store.credentials(for: Self.defaultDirectory)
+        XCTAssertEqual(credentials.accessToken, "live")
+        XCTAssertEqual(calls.arguments.count, 2, "a blank token must not end the lookup")
+    }
+
+    func testEverySignedOutCandidateStillReportsNotFound() {
+        let store = store(Calls()) { _ in (Self.signedOutPayload, 0) }
+        XCTAssertThrowsError(try store.credentials(for: Self.defaultDirectory)) { error in
+            XCTAssertEqual(
+                error as? KeychainError,
+                .notFound(services: KeychainCredentialStore.serviceNames(for: Self.defaultDirectory))
+            )
+        }
+    }
+
+    func testCorruptFirstCandidateStillThrowsWithALiveSecondBehindIt() {
+        let calls = Calls()
+        let store = store(calls) { service in
+            service == KeychainCredentialStore.serviceBase ? (Data("not json at all".utf8), 0) : (Self.livePayload(token: "live"), 0)
+        }
+        XCTAssertThrowsError(try store.credentials(for: Self.defaultDirectory)) { error in
+            XCTAssertEqual(error as? KeychainError, .malformedPayload)
+        }
+        XCTAssertEqual(calls.arguments.count, 1, "corruption stops the lookup — a working sibling must not hide it")
     }
 
     func testSecretDecodingHelpers() {

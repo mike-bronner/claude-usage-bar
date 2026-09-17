@@ -100,11 +100,12 @@ public struct KeychainCredentialStore: Sendable {
     }
 
     /// Reads candidates in order and stops at the first valid token, so nothing is read that
-    /// isn't needed; among expired entries the freshest wins. A missing candidate is fine, an
-    /// unreadable or malformed one is not.
+    /// isn't needed; among expired entries the freshest wins. A missing candidate is fine, and so
+    /// is a signed-out one — both carry no usable credentials. An unreadable or malformed one is
+    /// not.
     public func credentials(for configDirectory: URL) throws -> OAuthCredentials {
         try Self.select(from: Self.serviceNames(for: configDirectory)) { service in
-            try read(service: service).map(Self.decode)
+            try read(service: service).flatMap(Self.decode)
         }
     }
 
@@ -191,12 +192,22 @@ public struct KeychainCredentialStore: Sendable {
         return data
     }
 
-    static func decode(_ data: Data) throws -> OAuthCredentials {
+    /// Decodes a stored payload, or nil when this lineage holds no usable token.
+    ///
+    /// An absent or empty `accessToken` is not corruption: it is how a lineage that has been
+    /// signed out reads, and it means what a missing Keychain item means — no credentials here,
+    /// try the next candidate. A payload that will not parse, one without the oauth object, and a
+    /// token of the wrong type still throw, because those are the app's only warning that Claude
+    /// Code changed its storage format. Verified live 2026-09-17: the bare service name held an
+    /// emptied lineage in front of the live one, and the throw hid the live one for six days.
+    static func decode(_ data: Data) throws -> OAuthCredentials? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let oauth = root["claudeAiOauth"] as? [String: Any],
-              let token = oauth["accessToken"] as? String,
-              !token.isEmpty
+              let oauth = root["claudeAiOauth"] as? [String: Any]
         else { throw KeychainError.malformedPayload }
+
+        guard let storedToken = oauth["accessToken"] else { return nil }
+        guard let token = storedToken as? String else { throw KeychainError.malformedPayload }
+        guard !token.isEmpty else { return nil }
 
         return OAuthCredentials(
             accessToken: token,

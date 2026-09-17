@@ -78,6 +78,15 @@ latest `expiresAt` wins. Two reasons: taking the first match blindly read a stal
 reported a live account as idle, and each read is a process spawn, so nothing is read that isn't
 needed.
 
+A **signed-out lineage is skipped like a missing item**. Claude Code blanks the `accessToken` of a
+lineage it has signed out (`""`, `expiresAt` 0) and leaves the item in place, so a dead entry can
+sit in front of the live one — that is exactly what hid the default directory's working token for
+six days, until 2026-09-17. An absent or empty token therefore means "no credentials here, read the
+next candidate", never corruption. Corruption is a payload that will not parse, one without
+`claudeAiOauth`, or a token of the wrong type; each still throws `malformedPayload`, because that
+error is the only warning that Claude Code changed its storage format. When every candidate is
+skipped, the lookup ends in `notFound` naming the services it tried.
+
 ### Reading through `/usr/bin/security`, not `SecItemCopyMatching`
 
 The read spawns `security find-generic-password -a $USER -s <service> -w` and takes the secret
