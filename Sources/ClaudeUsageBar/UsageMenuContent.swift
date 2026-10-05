@@ -82,17 +82,26 @@ struct UsageMenuContent: View {
             HStack(spacing: 2) {
                 ForEach(model.accounts) { account in
                     let selected = account.id == model.selectedAccount?.id
+                    let level = model.level(for: account)
                     Button { model.selectedID = account.id } label: {
-                        Text(account.displayName)
-                            .lineLimit(1)
-                            .font(.caption.weight(selected ? .semibold : .regular))
-                            .foregroundStyle(selected ? Color.white : Color.primary)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 2)
-                            .background(selected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
-                            .contentShape(RoundedRectangle(cornerRadius: 5))
+                        // The dot wears the color this account's own icon would.
+                        HStack(spacing: 4) {
+                            Circle()
+                                .fill(Color(nsColor: RobotIcon.color(for: level)))
+                                .opacity(level == .idle ? 0.45 : 1)
+                                .frame(width: 6, height: 6)
+                            Text(account.displayName)
+                                .lineLimit(1)
+                        }
+                        .font(.caption.weight(selected ? .semibold : .regular))
+                        .foregroundStyle(selected ? Color.white : Color.primary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 2)
+                        .background(selected ? Color.accentColor : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(RoundedRectangle(cornerRadius: 5))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("\(account.displayName), \(RobotIcon.describe(level))")
                 }
             }
             .padding(1.5)

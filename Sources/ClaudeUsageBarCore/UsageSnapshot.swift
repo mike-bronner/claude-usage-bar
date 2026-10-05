@@ -104,6 +104,17 @@ public struct UsageSnapshot: Sendable, Equatable {
     public var weeklyAll: UsageLimit? { limits.first { $0.kind == .weeklyAll } }
     public var weeklyScoped: [UsageLimit] { limits.filter { $0.kind == .weeklyScoped } }
 
+    /// The limits whose window is still open at `now`. A limit whose reset has passed says nothing
+    /// about now; one with no reset yet has not started its window and still counts.
+    public func openLimits(at now: Date) -> [UsageLimit] {
+        limits.filter { $0.resetsAt.map { $0 > now } ?? true }
+    }
+
+    /// The earliest reset still ahead of `now`, when an open limit's window closes.
+    public func nextReset(after now: Date) -> Date? {
+        limits.compactMap(\.resetsAt).filter { $0 > now }.min()
+    }
+
     public static func decode(_ data: Data, fetchedAt: Date = Date()) throws -> UsageSnapshot {
         let payload: Payload
         do {

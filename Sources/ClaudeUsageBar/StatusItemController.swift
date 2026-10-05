@@ -16,6 +16,7 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let usageView: SelfSizingHostingView<UsageMenuContent>
     private var poller: Task<Void, Never>?
+    private var resetWake: Task<Void, Never>?
 
     init(model: UsageModel) {
         self.model = model
@@ -33,9 +34,30 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     /// Re-renders the icon whenever the observed status changes; re-arms itself each time.
     private func trackIcon() {
         withObservationTracking {
-            statusItem.button?.image = RobotIcon.image(for: model.statusLevel)
+            renderIcon()
         } onChange: { [weak self] in
             Task { @MainActor in self?.trackIcon() }
+        }
+    }
+
+    /// Draws the icon. The tooltip and the image's accessibility description name the account
+    /// driving it.
+    ///
+    /// The level also depends on the clock: a limit whose reset passes stops counting with no new
+    /// data, and no observed state changes then. So each render arms a wake-up for the next reset,
+    /// which re-renders from the numbers already held and sends no request.
+    private func renderIcon() {
+        let label = RobotIcon.label(account: model.iconAccount, level: model.statusLevel)
+        statusItem.button?.image = RobotIcon.image(for: model.statusLevel, label: label)
+        statusItem.button?.toolTip = label
+
+        resetWake?.cancel()
+        guard let reset = model.nextReset else { return }
+        resetWake = Task { @MainActor [weak self] in
+            // A second past the reset, so the limit is behind `now` when the level is recomputed.
+            try? await Task.sleep(for: .seconds(max(reset.timeIntervalSinceNow, 0) + 1))
+            guard !Task.isCancelled else { return }
+            self?.renderIcon()
         }
     }
 

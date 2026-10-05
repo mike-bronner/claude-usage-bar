@@ -11,16 +11,19 @@
 
 ## What you get
 
-- 🤖 **A robot in the menu bar** whose color is your status — green, yellow, orange, red as the
-  session fills; grey when the account is idle.
+- 🤖 **A robot in the menu bar** whose color is your status — green, yellow, orange, red as your
+  tightest limit fills, session or weekly; grey when no limit is still open. An idle account keeps
+  the color of its last-known numbers. Past a plan limit it shows a "$" face, purple turning red
+  as usage credits run down, and a red slash once nothing is left.
 - 📊 **Everything the Claude UI shows**, in a native menu: current session, weekly (all models and
   per model), resets, usage credits, and the plan — "Max (20x)", "Team (5x)".
-- 👥 **All your accounts.** Personal and work, `~/.claude` and `~/.claude-anything`. Switch in the
-  menu; the icon follows.
+- 👥 **All your accounts.** Personal and work, `~/.claude` and `~/.claude-anything`. The icon shows
+  the account with the least allowance left; its tooltip names it. The menu's picker switches the
+  details shown, and a colored dot marks each account's status.
 - 🔒 **Nothing to configure, nothing to store.** No API key, no settings file, no account list.
 
 <p align="center">
-  <img src="docs/icon-states.png" width="520" alt="Icon states on light and dark menu bars">
+  <img src="docs/icon-states.png" width="728" alt="Icon states on light and dark menu bars">
 </p>
 
 ## How this one is different

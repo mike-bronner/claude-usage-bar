@@ -33,19 +33,45 @@ Target: macOS 14+, Swift 6 strict concurrency.
 | Orchestration | `AccountUsageProvider` | Per account: fetch when the token is valid, report `.idle` when it is not |
 | Network | `UsageClient` | `GET https://api.anthropic.com/api/oauth/usage` with a bearer token, over an injectable `Transport` |
 | Decoding | `UsageSnapshot` | `limits` + `spend` → typed limits and credits; `ResetFormatter`, `PlanLabel` format them |
-| Status | `StatusLevel` | Session percent + server `severity` + idle → one of idle/unknown/low/medium/high/critical |
+| Status | `StatusLevel` | Tightest open limit (session, weekly, per-model weekly) + server `severity` + `spend` → one of idle/unknown/low/medium/high/critical/on credits/out, ordered worst first |
 | UI | `UsageModel`, `StatusItemController`, `UsageMenuContent`, `RobotIcon` | `@Observable` model polled every 15 min (the endpoint 429s under ~180 req/h and stays tripped for a long window); `NSStatusItem` + `NSMenu`; selected account persisted in `UserDefaults` |
 
 The `ClaudeUsageBar` target holds the only mutable state (`UsageModel`, `@MainActor`). It keeps the
 last snapshot through idle and failure so the menu dims numbers instead of blanking them. The menu
-bar item is a robot glyph drawn in code, colored by the selected account's `StatusLevel` (grey when
-idle or unknown, green → yellow → orange → red); no text.
+bar item is a robot glyph drawn in code; no text. It shows the account with the least allowance
+left, not the picker selection, so its tooltip and accessibility description name that account.
 
 The dropdown is a real `NSMenu`, not a `MenuBarExtra(.window)` panel — the HIG asks a menu bar
 extra to show a menu, and only a menu gets the system's attached chrome. Standard items carry the
 commands (Refresh ⌘R, Quit ⌘Q); one custom item hosts `UsageMenuContent` — account picker and usage
 block — in an `NSHostingView`, the way Battery and Wi-Fi show status a plain item cannot. The picker
 is in the custom view because a native item dismisses the menu when picked.
+
+### The icon's status
+
+Each account's `StatusLevel` comes from its tightest limit whose `resets_at` is still ahead: a spent
+weekly limit blocks Claude Code as hard as a spent session, and a limit past its reset says nothing
+about now. An idle account counts with its last-known numbers, so a nearly spent account cannot
+hide behind idleness. A failed account does the same: a failure can be a locked Keychain or no
+network after wake, and greying out a spent account would be a calm lie. Within one level, the
+account with the higher tightest open limit drives the icon. The icon re-renders at the next reset
+from the numbers it holds, without a request. Worst first:
+
+- **Out**: a limit is at 100% and `spend` is absent, not `enabled`, or at 100%. Red robot, slashed.
+- **On credits**: a limit is at 100% and `spend.enabled` with `percent` under 100. Solid head with a
+  punched-out "$"; the tint runs from system purple at 0% of credits used to system red at 100%. More
+  credit used is worse.
+- **Critical / high / medium / low**: red, orange, yellow, green, by percent (from 90 / 75 / 50). A
+  `warning` severity raises a limit to at least high, any other non-"normal" severity to critical.
+- **Unknown, then idle**: grey; idle is dimmed. These count only when no account has numbers.
+
+No response from an account past its plan limit has been observed yet. The on-credits test reads
+`spend.enabled` and `spend.percent`; the response also carries an unread `extra_usage` object
+(`is_enabled`, `utilization`) that may be the better signal once one is seen.
+An enabled `spend` with no `percent` decodes to 0, so it reads as "on credits, 0%".
+
+Each picker button carries a dot in its account's own color; an out account's dot is plain red.
+The glyph's styles live in `RobotGlyph`; its default `.face` is what the app icon renders, unchanged.
 
 ### Read-only over Claude Code's credentials — never refresh
 

@@ -42,7 +42,7 @@ final class UsageModel {
     private(set) var lastRefresh: Date?
     private var retryNotBefore: [Account.ID: Date] = [:]
 
-    /// The account the menu bar item reflects. Persisted so it survives relaunch.
+    /// The account whose details the menu shows. Persisted so it survives relaunch.
     var selectedID: Account.ID? {
         didSet { defaults.set(selectedID, forKey: Self.selectedAccountKey) }
     }
@@ -69,20 +69,36 @@ final class UsageModel {
         accounts.first { $0.id == selectedID } ?? accounts.first
     }
 
-    var selectedStatus: Status? {
-        selectedAccount.flatMap { statuses[$0.id] }
+    /// One account's level: its icon color and its picker dot. Idleness, throttling, and failure
+    /// all keep the last numbers, so they keep their level too: a failure can be a transient
+    /// locked Keychain or no network after wake, and greying out a spent account would be a calm
+    /// lie. Only with no limit still open does it read unknown, or idle for an idle account.
+    func level(for account: Account) -> StatusLevel {
+        guard let status = statuses[account.id] else { return .unknown }
+        return StatusLevel.classify(snapshot: status.snapshot, idle: status.isIdle, now: now())
     }
 
-    /// Drives the menu bar icon's color for the selected account. Throttling keeps the last
-    /// numbers, so it keeps their color too.
+    /// The account with the least allowance left, which the menu bar icon reflects whatever the
+    /// picker shows. Within one level the higher tightest open limit wins (on credits, the level
+    /// already ranks by credit used); only on a true tie does the earlier account win.
+    var iconAccount: Account? {
+        accounts.max { urgency(of: $0) < urgency(of: $1) }
+    }
+
+    private func urgency(of account: Account) -> (StatusLevel, Double) {
+        let tightest = statuses[account.id]?.snapshot?.openLimits(at: now()).map(\.percent).max() ?? 0
+        return (level(for: account), tightest)
+    }
+
+    /// The earliest reset still ahead across every account: when the icon must be re-evaluated
+    /// without new data, because a limit's window closes.
+    var nextReset: Date? {
+        statuses.values.compactMap { $0.snapshot?.nextReset(after: now()) }.min()
+    }
+
+    /// The menu bar icon's level: that of `iconAccount`.
     var statusLevel: StatusLevel {
-        guard let status = selectedStatus else { return .unknown }
-        if case .failed = status.condition { return .unknown }
-        return StatusLevel.classify(
-            sessionPercent: status.snapshot?.session?.percent,
-            severity: status.snapshot?.session?.severity,
-            idle: status.isIdle
-        )
+        iconAccount.map(level(for:)) ?? .unknown
     }
 
     /// Rescans accounts, then fetches all of them concurrently. Never throws: every failure lands
